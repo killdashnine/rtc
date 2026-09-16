@@ -533,4 +533,67 @@ mod tests {
 
         Ok(())
     }
+
+    /// RFC 6347 4.2.4: the sender of the last flight has to retransmit it when the peer repeats its
+    /// own final flight, because it cannot know its flight arrived. Here the server's last flight
+    /// (ChangeCipherSpec + Finished) is lost in transit, the client retransmits on its own timer, and
+    /// the server has to answer with a fresh flight so the client can complete.
+    #[cfg(feature = "crypto-ring")]
+    #[test]
+    fn a_completed_server_retransmits_its_last_flight_when_the_client_repeats_its_own()
+    -> Result<()> {
+        let provider: Arc<dyn RTCCryptoProvider> = Arc::new(crypto::providers::RingProvider::new());
+        let suites = [CipherSuiteId::Tls_Ecdhe_Ecdsa_With_Aes_128_Gcm_Sha256];
+        let client_config = config(provider.clone(), true, &suites)?;
+        let server_config = config(provider, false, &suites)?;
+        let mut client = Endpoint::new(client_addr(), TransportProtocol::UDP, None);
+        let mut server = Endpoint::new(server_addr(), TransportProtocol::UDP, Some(server_config));
+        client.connect(Instant::now(), server_addr(), client_config, None)?;
+
+        // Drive until the server completes. Its last flight is queued at that point, not yet taken.
+        let mut server_complete = false;
+        for _ in 0..32 {
+            for event in transfer(&mut client, &mut server, client_addr())? {
+                server_complete |= matches!(event, EndpointEvent::HandshakeComplete);
+            }
+            if server_complete {
+                break;
+            }
+            transfer(&mut server, &mut client, server_addr())?;
+        }
+        assert!(server_complete, "the server side never completed");
+
+        // Lose it: drain the server's queued last flight and deliver none of it.
+        let mut lost = 0usize;
+        while server.poll_transmit().is_some() {
+            lost += 1;
+        }
+        assert!(lost > 0, "the server had a last flight to lose");
+
+        // The client is still waiting for that flight, with its retransmit timer armed.
+        let deadline = client
+            .poll_timeout(&server_addr())
+            .expect("a client waiting for the last flight arms a retransmit timer");
+        client.handle_timeout(server_addr(), deadline)?;
+
+        // Its retransmitted flight reaches the server...
+        let mut retransmitted = 0usize;
+        while let Some(transmit) = client.poll_transmit() {
+            retransmitted += 1;
+            server.read(
+                deadline,
+                client_addr(),
+                transmit.transport.ecn,
+                transmit.message,
+            )?;
+        }
+        assert!(retransmitted > 0, "the client retransmitted its own flight");
+
+        // ...and the server owes it a fresh last flight.
+        assert!(
+            server.poll_transmit().is_some(),
+            "a completed server has to retransmit its last flight when the peer repeats its own"
+        );
+        Ok(())
+    }
 }
