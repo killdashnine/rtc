@@ -102,9 +102,17 @@ impl DTLSConn {
             };
 
             if previous_handshake_state == self.current_handshake_state
-                && previous_handshake_state == HandshakeState::Waiting
+                && matches!(
+                    previous_handshake_state,
+                    HandshakeState::Waiting | HandshakeState::Finished
+                )
             {
-                // wait for timeout or incoming packet
+                // Wait for a timeout or an incoming packet. `Finished` self transitions for the same
+                // reason `Waiting` does, and has to terminate for a stronger one: an association
+                // re-entered here after completing (the RFC 6347 4.2.4 last flight retransmission)
+                // has already passed the loop head guard, which only returns while
+                // `!is_handshake_completed()`. `send()` queues the flight and yields `Finished`,
+                // `finish()` yields `Finished` again, and without this the loop would spin.
                 return Ok(());
             }
         }

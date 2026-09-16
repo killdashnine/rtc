@@ -201,6 +201,17 @@ impl Endpoint {
                 if is_handshake && !conn.is_handshake_completed() {
                     conn.handshake(now)?;
                 }
+            } else if conn.handshake_rx.is_some() {
+                // RFC 6347 4.2.4: the sender of the last flight cannot know it arrived, so a peer
+                // repeating its own final flight means ours was lost and has to be sent again. The
+                // association is complete, so the FSM above is skipped, and `send()` arms
+                // `current_retransmit_timer` only on the non-final path, so `handle_timeout` never
+                // fires for it either. Without this the repeat is absorbed into the handshake cache
+                // and answered with nothing, and the peer retransmits until it gives up.
+                // `handshake_timeout` owns the Finished -> Sending self loop, which regenerates the
+                // flight with fresh record sequence numbers; a verbatim replay would be dropped by
+                // the peer's replay window (4.1.2.6).
+                conn.handshake_timeout(now)?;
             }
             if !is_handshake_completed_before && conn.is_handshake_completed() {
                 messages.push(EndpointEvent::HandshakeComplete)
