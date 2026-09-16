@@ -551,8 +551,8 @@ mod tests {
     /// the server has to answer with a fresh flight so the client can complete.
     #[cfg(feature = "crypto-ring")]
     #[test]
-    fn a_completed_server_retransmits_its_last_flight_when_the_client_repeats_its_own()
-    -> Result<()> {
+    fn a_completed_server_retransmits_its_last_flight_when_the_client_repeats_its_own() -> Result<()>
+    {
         let provider: Arc<dyn RTCCryptoProvider> = Arc::new(crypto::providers::RingProvider::new());
         let suites = [CipherSuiteId::Tls_Ecdhe_Ecdsa_With_Aes_128_Gcm_Sha256];
         let client_config = config(provider.clone(), true, &suites)?;
